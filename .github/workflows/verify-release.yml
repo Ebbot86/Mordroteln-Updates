@@ -1,0 +1,46 @@
+name: Kontrollera publicerad MORDROTELN-uppdatering
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hämta senaste release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          gh release download --repo Ebbot86/Mordroteln-Updates             --pattern MORDROTELN-release.apk             --pattern latest.json             --dir release
+
+      - name: Verifiera paket, metadata och SHA-256
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, hashlib, pathlib, zipfile
+          root = pathlib.Path('release')
+          apk = root / 'MORDROTELN-release.apk'
+          manifest = root / 'latest.json'
+          assert apk.is_file() and apk.stat().st_size > 1024, 'Missing Android APK'
+          assert manifest.is_file(), 'Missing update manifest'
+          info = json.loads(manifest.read_text(encoding='utf-8'))
+          assert info.get('packageName') == 'se.mordroteln.app'
+          assert isinstance(info.get('versionCode'), int) and info['versionCode'] > 0
+          assert isinstance(info.get('versionName'), str) and info['versionName']
+          assert info.get('apkUrl') == 'https://github.com/Ebbot86/Mordroteln-Updates/releases/latest/download/MORDROTELN-release.apk'
+          actual = hashlib.sha256(apk.read_bytes()).hexdigest()
+          assert info.get('sha256', '').lower() == actual, 'APK checksum mismatch'
+          with zipfile.ZipFile(apk) as z:
+              names = set(z.namelist())
+              assert 'AndroidManifest.xml' in names, 'Not an Android package'
+              assert 'classes.dex' in names, 'Missing Android code'
+          print('Verified public MORDROTELN version', info['versionName'], 'SHA-256', actual)
+          PY
